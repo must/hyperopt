@@ -212,8 +212,12 @@ def parse_url(url, pwfile=None):
         
     logger.info('AUTH DB %s' % authdbname)
     
+    newPath = tmp.path
+    if(not tmp.path.endswith('/jobs')):
+      newPath = tmp.path + '/jobs'
+    
     try:
-        _, dbname, collection = tmp.path.split('/')
+        _, dbname, collection = newPath.split('/')
     except:
         print("Failed to parse '%s'" % (str(tmp.path)), file=sys.stderr)
         raise
@@ -229,14 +233,17 @@ def parse_url(url, pwfile=None):
         password = tmp.password
     if password is not None:
         logger.info('PASS ***')
-    port = int(float(tmp.port))  # port has to be casted explicitly here.
+
+    if(tmp.port is not None):
+      port = int(float(tmp.port))  # port has to be casted explicitly here.
+    port = 27017
 
     return (protocol, tmp.username, password, tmp.hostname, port, dbname, collection, authdbname)
 
 
 def connection_with_tunnel(dbname, host='localhost',
                            auth_dbname=None, port=27017,
-                           ssh=False, user='hyperopt', pw=None):
+                           ssh=False, user='hyperopt', pw=None, protocol = 'mongo', url = ''):
     if ssh:
         local_port = numpy.random.randint(low=27500, high=28000)
         # -- forward from local to remote machine
@@ -250,15 +257,18 @@ def connection_with_tunnel(dbname, host='localhost',
         connection = pymongo.MongoClient('127.0.0.1', local_port,
                                          document_class=SON, w=1, j=True)
     else:
-        connection = pymongo.MongoClient(host, port, document_class=SON, w=1, j=True)
-        if user:
-            if not pw:
-                pw = read_pw()
-                
-            if user == 'hyperopt' and not auth_dbname:
-                auth_dbname = 'admin'
-                    
-            connection[dbname].authenticate(user, pw, source=auth_dbname)
+        if(protocol == 'mongodb+srv'):
+          connection = pymongo.MongoClient(url, document_class=SON, w=1, j=True)
+        else:
+          connection = pymongo.MongoClient(host, port, document_class=SON, w=1, j=True)
+          if user:
+              if not pw:
+                  pw = read_pw()
+                  
+              if user == 'hyperopt' and not auth_dbname:
+                  auth_dbname = 'admin'
+                      
+              connection[dbname].authenticate(user, pw, source=auth_dbname)
             
         ssh_tunnel = None
 
@@ -271,7 +281,7 @@ def connection_with_tunnel(dbname, host='localhost',
 
 def connection_from_string(s):
     protocol, user, pw, host, port, db, collection, authdb = parse_url(s)
-    if protocol == 'mongo':
+    if protocol in ('mongo', 'mongodb+srv') :
         ssh = False
     elif protocol in ('mongo+ssh', 'ssh+mongo'):
         ssh = True
@@ -284,7 +294,9 @@ def connection_from_string(s):
         pw=pw,
         host=host,
         port=port,
-        auth_dbname=authdb
+        auth_dbname=authdb,
+        protocol=protocol,
+        url=s
     )
     return connection, tunnel, connection[db], connection[db][collection]
 
@@ -1168,7 +1180,7 @@ def exec_import(cmd_module, cmd):
 
 
 def as_mongo_str(s):
-    if s.startswith('mongo://'):
+    if s.startswith('mongo://') or s.startswith('mongodb+srv://'):
         return s
     else:
         return 'mongo://%s' % s
@@ -1250,8 +1262,9 @@ def main_worker_helper(options, args):
     elif N == 1:
         # XXX: the name of the jobs collection is a parameter elsewhere,
         #      so '/jobs' should not be hard-coded here
+
         mj = MongoJobs.new_from_connection_str(
-            as_mongo_str(options.mongo) + '/jobs')
+            as_mongo_str(options.mongo)) # + '/jobs'
 
         mworker = MongoWorker(mj,
                               float(options.poll_interval),
